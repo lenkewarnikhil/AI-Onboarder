@@ -119,22 +119,19 @@ Use this as initial context, but ALWAYS verify claims by exploring the code."""
         
         Args:
             messages: List of message dicts with 'role' and 'content'
+                     Note: The agent maintains its own conversation history,
+                     so we only need the latest user message.
             
         Returns:
             Assistant's response
         """
-        # Build conversation prompt
-        conversation = []
-        for msg in messages:
-            role = msg['role']
-            content = msg['content']
-            
-            if role == 'user':
-                conversation.append(f"User: {content}")
-            elif role == 'assistant':
-                conversation.append(f"Assistant: {content}")
-        
-        # Add latest user message as the prompt
+        # Extract only the latest user message
+        # The agent's internal conversation_history maintains full context
         latest_user_msg = [m['content'] for m in messages if m['role'] == 'user'][-1]
         
         return self.generate(latest_user_msg, max_iterations=100)
+    
+    def clear_history(self):
+        """Clear conversation history to start fresh"""
+        self.conversation_history = []
+        log.info(f'[{self.session_id}] Conversation history cleared')

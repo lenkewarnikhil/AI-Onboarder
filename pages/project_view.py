@@ -12,7 +12,8 @@ import asyncio
 from lib.database import (
     get_project, get_documents_by_project, create_document,
     get_document_by_project_and_type, create_video, get_videos_by_document,
-    update_video_status, update_document_status, delete_document_by_type
+    update_video_status, update_document_status, delete_document_by_type,
+    replace_document_safely, get_document_version_history
 )
 from lib.types import Document, Video
 from lib.git import get_or_create_session, get_existing_session
@@ -35,12 +36,19 @@ DOC_TITLES = {
     'custom': 'Custom Document'
 }
 
-def generate_document_async(document_id: str, project_id: str, doc_type: str, title: str, project_md: str, github_url: str):
-    """Generate document in background"""
+def generate_document_async(document_id: str, project_id: str, doc_type: str, title: str, project_md: str, github_url: str, old_doc_id: str = None):
+    """
+    Generate document in background
+    
+    Args:
+        document_id: ID of the new document being generated
+        old_doc_id: ID of the old document to replace (if regenerating)
+    """
     try:
         log.info('=' * 80)
         log.info(f'DOCUMENT GENERATION START')
         log.info(f'Document ID: {document_id}')
+        log.info(f'Old Doc ID: {old_doc_id}' if old_doc_id else 'New Document')
         log.info(f'Project ID: {project_id}')
         log.info(f'Doc Type: {doc_type}')
         log.info(f'GitHub URL: {github_url}')
@@ -86,15 +94,21 @@ def generate_document_async(document_id: str, project_id: str, doc_type: str, ti
             
             content = agent.generate_doc(project_md, title, context_only=False)
         
-        # Update document with content and mark as ready
-        update_document_status(document_id, 'ready', content=content)
-        log.info(f'✅ Document ready: {document_id}')
+        # Safely replace old document if regenerating
+        if old_doc_id:
+            replace_document_safely(old_doc_id, document_id, content, 'ready')
+            log.info(f'✅ Document regenerated: {document_id} (archived old version: {old_doc_id})')
+        else:
+            # New document - just update with content
+            update_document_status(document_id, 'ready', content=content)
+            log.info(f'✅ Document ready: {document_id}')
         
     except Exception as e:
         log.error(f'❌ Document generation failed: {e}')
         import traceback
         traceback.print_exc()
         update_document_status(document_id, 'error', error_message=str(e))
+        # Note: Old document is preserved if regeneration fails
 
 def generate_video_async_wrapper(video_id: str, document_id: str, document: Document, color_scheme: str = 'ocean'):
     """Generate video in background"""
@@ -170,7 +184,10 @@ def render(navigate_to, project_id: str):
             diagram_url=None,
             created_at=datetime.now().isoformat(),
             status='pending',
-            error_message=None
+            error_message=None,
+            version=1,
+            updated_at=None,
+            previous_version_id=None
         )
         create_document(overview)
         
@@ -248,6 +265,7 @@ def render_documents_tab(project):
         with col2:
             if st.button('Generate', type='primary', use_container_width=True):
                 # Check if document already exists (except for custom)
+                old_doc_id = None
                 if doc_type != 'custom':
                     existing = get_document_by_project_and_type(project.id, doc_type)
                     if existing:
@@ -255,9 +273,9 @@ def render_documents_tab(project):
                             st.warning('⏳ This document is already being generated...')
                             st.stop()
                         elif existing.status == 'ready':
-                            st.info('ℹ️ This document type already exists. It will be regenerated.')
-                            # Delete existing document before regenerating
-                            delete_document_by_type(project.id, doc_type)
+                            st.info(f'ℹ️ Regenerating (current version: {existing.version}). Old version will be preserved.')
+                            # Keep old document ID for safe replacement
+                            old_doc_id = existing.id
                 
                 title = DOC_TITLES[doc_type]
                 
@@ -272,14 +290,17 @@ def render_documents_tab(project):
                     diagram_url=None,
                     created_at=datetime.now().isoformat(),
                     status='pending',
-                    error_message=None
+                    error_message=None,
+                    version=1,  # Will be updated during safe replacement
+                    updated_at=None,
+                    previous_version_id=None
                 )
                 create_document(document)
                 
-                # Start background generation
+                # Start background generation with old_doc_id for safe replacement
                 thread = threading.Thread(
                     target=generate_document_async,
-                    args=(document_id, project.id, doc_type, title, project.project_md, project.github_url),
+                    args=(document_id, project.id, doc_type, title, project.project_md, project.github_url, old_doc_id),
                     daemon=True
                 )
                 thread.start()
@@ -308,23 +329,28 @@ def render_documents_tab(project):
     # Load documents
     documents = get_documents_by_project(project.id)
     
+    # Filter to show only current versions (exclude archived documents)
+    # Archived documents have type prefixed with "_archived_"
+    current_documents = [doc for doc in documents if not doc.type.startswith('_archived_')]
+    
     # Check if any documents are generating (for auto-refresh)
-    has_generating = any(doc.status == 'generating' or doc.status == 'pending' for doc in documents)
+    has_generating = any(doc.status == 'generating' or doc.status == 'pending' for doc in current_documents)
     if has_generating:
         st.info('⏳ Documents are being generated... This page will auto-refresh.')
         import time
         time.sleep(3)
         st.rerun()
     
-    if not documents:
+    if not current_documents:
         st.info('No documents yet. Generate one above.')
     else:
-        # Display PROJECT.md first
-        with st.expander('📋 PROJECT.md (Repository Analysis)', expanded=True):
-            st.markdown(project.project_md)
+        # Display PROJECT.md first (only if it's properly generated)
+        if project.project_md and len(project.project_md.strip()) > 100 and not project.project_md.startswith('Okay, I'):
+            with st.expander('📋 PROJECT.md', expanded=False):
+                st.markdown(project.project_md)
         
-        # Display other documents
-        for doc in documents:
+        # Display only current versions of documents
+        for doc in current_documents:
             # Status indicator
             status_emoji = {
                 'pending': '⏳',
@@ -334,10 +360,80 @@ def render_documents_tab(project):
             }
             emoji = status_emoji.get(doc.status, '❓')
             
-            with st.expander(f'{emoji} {doc.title} ({doc.status.upper()})'):
+            # Build title with version info
+            title_text = f'{emoji} {doc.title}'
+            if doc.status == 'ready' and doc.version > 1:
+                title_text += f' (v{doc.version})'
+            # Don't show status in title anymore
+            
+            with st.expander(title_text):
                 if doc.status == 'ready':
+                    # Version and timestamp info
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.caption(f'📅 Created: {doc.created_at[:10]}')
+                    with col2:
+                        if doc.updated_at:
+                            st.caption(f'🔄 Updated: {doc.updated_at[:10]}')
+                        else:
+                            st.caption("🔄 Updated: 1st time")
+                    with col3:
+                        regeneration_count = doc.version - 1
+                        st.caption(f'🔁 Regenerated: {regeneration_count} time{"s" if regeneration_count != 1 else ""}')
+                    
+                    # Version history link
+                    if doc.previous_version_id or doc.version > 1:
+                        if st.button(f'📜 View Version History ({doc.version} versions)', key=f'history_{doc.id}'):
+                            # Toggle version history in session state
+                            st.session_state[f'show_history_{doc.type}'] = not st.session_state.get(f'show_history_{doc.type}', False)
+                            st.rerun()
+                    
+                    # Show version history if requested
+                    if st.session_state.get(f'show_history_{doc.type}', False):
+                        st.markdown('---')
+                        st.subheader('📚 Version History')
+                        versions = get_document_version_history(project.id, doc.type)
+                        
+                        # Display versions in a compact list with three-dots menu
+                        for v in versions:
+                            v_num = v.version
+                            v_date = v.updated_at[:10] if v.updated_at else v.created_at[:10]
+                            is_current = v.id == doc.id
+                            
+                            # Create columns for version info and actions
+                            v_col1, v_col2, v_col3 = st.columns([3, 1, 1])
+                            
+                            with v_col1:
+                                if is_current:
+                                    st.markdown(f"**Version {v_num}** - {v_date} 🟢 *Current*")
+                                else:
+                                    st.markdown(f"**Version {v_num}** - {v_date}")
+                            
+                            with v_col2:
+                                st.caption(f"{len(v.content)} chars")
+                            
+                            with v_col3:
+                                # Three dots menu to expand version
+                                if st.button('⋯', key=f'expand_v_{v.id}', help='View content'):
+                                    # Toggle expanded state for this version
+                                    expanded_key = f'expanded_version_{v.id}'
+                                    st.session_state[expanded_key] = not st.session_state.get(expanded_key, False)
+                                    st.rerun()
+                            
+                            # Show content if expanded
+                            if st.session_state.get(f'expanded_version_{v.id}', False):
+                                with st.container():
+                                    st.markdown('---')
+                                    st.markdown(v.content)
+                                    st.markdown('---')
+                        
+                        if st.button('✖ Hide Version History', key=f'hide_history_{doc.id}'):
+                            st.session_state[f'show_history_{doc.type}'] = False
+                            st.rerun()
+                    
+                    st.markdown('---')
                     st.markdown(doc.content)
-                    st.caption(f'Generated: {doc.created_at[:10]}')
+                    
                 elif doc.status == 'generating':
                     st.info('🔄 Generating document... Please wait.')
                     st.spinner('Processing...')
@@ -346,6 +442,8 @@ def render_documents_tab(project):
                 elif doc.status == 'error':
                     st.error(f'❌ Generation failed: {doc.error_message}')
                     st.caption(f'Created: {doc.created_at[:10]}')
+                    if doc.version > 1:
+                        st.info('ℹ️ Previous version is still available (preserved on failure)')
 
 def render_videos_tab(project):
     """Render videos tab"""
@@ -473,6 +571,10 @@ def render_chat_tab(project):
     if 'chat_session_id' not in st.session_state:
         st.session_state.chat_session_id = None
     
+    # Initialize cached QA agent (None means it will be created on first message)
+    if 'qa_agent' not in st.session_state:
+        st.session_state.qa_agent = None
+    
     # Initialize or refresh context mode flag based on current session status
     session = get_existing_session(project.id, project.github_url)
     st.session_state.chat_context_mode = session is None
@@ -483,6 +585,9 @@ def render_chat_tab(project):
         with col2:
             if st.button("🗑️ Clear", use_container_width=True, key="clear_chat_btn"):
                 st.session_state.chat_messages = []
+                # Clear the cached agent to start fresh conversation
+                st.session_state.qa_agent = None
+                log.info('Chat history and agent cleared')
                 st.rerun()
     
     # Welcome message if chat is empty
@@ -651,16 +756,22 @@ def process_chat_message(project, user_message):
             st.session_state.chat_context_mode = True  # Update flag - using fallback
             log.info(f'No valid session found. Chat using PROJECT.md context only')
         
-        # Create agent with appropriate mode
-        if context_only:
-            repo_tools = None  # No tools needed for context-only mode
+        # Reuse existing agent if available, otherwise create new one
+        # Agent is cached in session_state to maintain conversation context
+        if st.session_state.qa_agent is None:
+            log.info('Creating new QA agent (first message or after clear)')
+            # Create agent with appropriate mode
+            if context_only:
+                repo_tools = None  # No tools needed for context-only mode
+            else:
+                repo_tools = create_repo_tools(repo_path)
+            
+            st.session_state.qa_agent = QAAgent(repo_tools, project.project_md, context_only=context_only)
         else:
-            repo_tools = create_repo_tools(repo_path)
+            log.info(f'Reusing existing QA agent [{st.session_state.qa_agent.session_id}]')
         
-        qa_agent = QAAgent(repo_tools, project.project_md, context_only=context_only)
-        
-        # Get response
-        response = qa_agent.chat(st.session_state.chat_messages)
+        # Get response using cached agent (maintains conversation context internally)
+        response = st.session_state.qa_agent.chat(st.session_state.chat_messages)
         
         # Add assistant message (replaces thinking indicator)
         st.session_state.chat_messages.append({

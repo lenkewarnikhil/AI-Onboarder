@@ -54,9 +54,31 @@ def init_db():
             created_at TEXT NOT NULL,
             status TEXT DEFAULT 'pending',
             error_message TEXT,
+            version INTEGER DEFAULT 1,
+            updated_at TEXT,
+            previous_version_id TEXT,
             FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
         )
     ''')
+    
+    # Migration: Add version columns if they don't exist (for existing databases)
+    try:
+        cursor.execute('ALTER TABLE documents ADD COLUMN version INTEGER DEFAULT 1')
+        log.info('Added version column to documents table')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    
+    try:
+        cursor.execute('ALTER TABLE documents ADD COLUMN updated_at TEXT')
+        log.info('Added updated_at column to documents table')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    
+    try:
+        cursor.execute('ALTER TABLE documents ADD COLUMN previous_version_id TEXT')
+        log.info('Added previous_version_id column to documents table')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
     
     # Videos table
     cursor.execute('''
@@ -184,8 +206,8 @@ def create_document(document: Document) -> Document:
     cursor = conn.cursor()
     
     cursor.execute('''
-        INSERT INTO documents (id, project_id, type, title, content, diagram_url, created_at, status, error_message)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO documents (id, project_id, type, title, content, diagram_url, created_at, status, error_message, version, updated_at, previous_version_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         document.id,
         document.project_id,
@@ -195,7 +217,10 @@ def create_document(document: Document) -> Document:
         document.diagram_url,
         document.created_at,
         document.status,
-        document.error_message
+        document.error_message,
+        document.version,
+        document.updated_at,
+        document.previous_version_id
     ))
     
     conn.commit()
@@ -281,6 +306,86 @@ def delete_document_by_type(project_id: str, doc_type: str):
     conn.commit()
     conn.close()
     log.info(f'Deleted {cursor.rowcount} document(s)')
+
+def archive_document_version(document_id: str):
+    """Mark a document as archived (previous version) by prefixing its type"""
+    log.info(f'Archiving document version: {document_id}')
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Update the type to mark it as archived (won't show in normal queries)
+    cursor.execute('''
+        UPDATE documents 
+        SET type = '_archived_' || type
+        WHERE id = ?
+    ''', (document_id,))
+    
+    conn.commit()
+    conn.close()
+
+def get_document_version_history(project_id: str, doc_type: str) -> List[Document]:
+    """Get version history for a document type (includes archived versions)"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Get current version and all archived versions
+    cursor.execute('''
+        SELECT * FROM documents 
+        WHERE project_id = ? 
+        AND (type = ? OR type = '_archived_' || ?)
+        ORDER BY version DESC
+    ''', (project_id, doc_type, doc_type))
+    
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return [Document(**dict(row)) for row in rows]
+
+def replace_document_safely(old_doc_id: str, new_doc_id: str, new_content: str, new_status: str = 'ready'):
+    """
+    Safely replace old document with new one:
+    1. Update new document with content
+    2. Archive old document (keep as previous version)
+    3. Link new document to old version
+    
+    This ensures data safety - old document is preserved, not deleted
+    """
+    from datetime import datetime
+    
+    log.info(f'Safely replacing document {old_doc_id} with {new_doc_id}')
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Get old document info
+    cursor.execute('SELECT version FROM documents WHERE id = ?', (old_doc_id,))
+    old_version_row = cursor.fetchone()
+    old_version = dict(old_version_row)['version'] if old_version_row else 0
+    new_version = old_version + 1
+    
+    # Update new document with content and version info
+    cursor.execute('''
+        UPDATE documents 
+        SET status = ?, 
+            content = ?, 
+            version = ?,
+            updated_at = ?,
+            previous_version_id = ?
+        WHERE id = ?
+    ''', (new_status, new_content, new_version, datetime.now().isoformat(), old_doc_id, new_doc_id))
+    
+    # Archive old document (instead of deleting)
+    cursor.execute('''
+        UPDATE documents 
+        SET type = '_archived_' || type
+        WHERE id = ?
+    ''', (old_doc_id,))
+    
+    conn.commit()
+    conn.close()
+    
+    log.info(f'Document replaced: v{old_version} → v{new_version} (old version archived)')
 
 # ============================================================================
 # VIDEO OPERATIONS

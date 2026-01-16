@@ -42,6 +42,9 @@ class Document:
     created_at: str
     status: str = 'pending'  # pending, generating, ready, error
     error_message: Optional[str] = None
+    version: int = 1  # Tracks regeneration count (1 = first generation)
+    updated_at: Optional[str] = None  # Last regeneration timestamp
+    previous_version_id: Optional[str] = None  # Link to previous version for history
 
 @dataclass
 class Video:

@@ -44,6 +44,10 @@ class BaseAgent:
         import uuid
         self.session_id = str(uuid.uuid4())[:8]
         
+        # Initialize conversation history for persistent chat sessions
+        # This allows the agent to maintain context across multiple interactions
+        self.conversation_history = []
+        
         # Log repository info for debugging
         if repo_tools:
             log.info(f'[{self.session_id}] Agent initialized with repository: {repo_tools.repo_path}')
@@ -147,10 +151,12 @@ class BaseAgent:
                 tools=self.tools if self.tools else None
             )
             
-            # Start with user prompt
-            messages = [
+            # Start with conversation history + new user prompt
+            # Use persistent conversation history to maintain context across multiple turns
+            messages = self.conversation_history.copy()
+            messages.append(
                 types.Content(role='user', parts=[types.Part(text=prompt)])
-            ]
+            )
             
             iteration = 0
             while iteration < max_iterations:
@@ -165,6 +171,17 @@ class BaseAgent:
                 # Check if response has text (final answer)
                 if hasattr(response, 'text') and response.text:
                     log.info(f'[{session_id}] ✅ Response generated after {iteration} tool calls')
+                    
+                    # Save conversation history for next turn
+                    # Add user message
+                    self.conversation_history.append(
+                        types.Content(role='user', parts=[types.Part(text=prompt)])
+                    )
+                    # Add assistant response
+                    self.conversation_history.append(
+                        types.Content(role='model', parts=[types.Part(text=response.text)])
+                    )
+                    
                     return response.text
                 
                 # Check for function calls

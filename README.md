@@ -192,7 +192,7 @@ session = get_or_create_session(project_id, github_url)
 
 2. **Asset Creation**
    - Text-to-Speech for voiceovers (gTTS)
-   - AI-generated images for each slide (Pollinations.ai)
+   - Programmatic slide design using PIL/Pillow (gradients, text, visual elements)
    - Background music and transitions
 
 3. **Video Assembly** (MoviePy)
@@ -264,7 +264,7 @@ AI-Onboarder/
 | **Database** | SQLite | Project & document storage |
 | **Media Processing** | MoviePy, FFmpeg | Video generation |
 | **Text-to-Speech** | gTTS | Voice generation |
-| **Image Generation** | Pollinations.ai | Slide visuals |
+| **Image Generation** | PIL/Pillow | Programmatic slide design |
 
 ### Data Models
 
