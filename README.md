@@ -74,7 +74,13 @@ Generate specialized documents for different needs:
 - Searches entire repository for relevant code
 - Provides context-aware responses
 
-### 5. 🗄️ **Project Management**
+### 5. � **Single Sign-On (SSO) Authentication** *(Optional)*
+- Secure access control via OAuth 2.0
+- Support for Google, GitHub, Microsoft, and Okta
+- Session management and timeout controls
+- User profile tracking and audit trails
+
+### 6. �🗄️ **Project Management**
 - Track multiple repositories
 - Manage document versions
 - Monitor video generation status
@@ -378,6 +384,8 @@ sudo apt install ffmpeg
    ```
 
 3. Get your free API key from [Google AI Studio](https://ai.google.dev)
+
+4. **(Optional) Configure SSO**: To enable Single Sign-On authentication, see [SSO_SETUP.md](SSO_SETUP.md) for detailed instructions on configuring Google, GitHub, Microsoft, or Okta OAuth providers.
 
 ### Step 6: Initialize Database
 

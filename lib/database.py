@@ -95,11 +95,28 @@ def init_db():
         )
     ''')
     
+    # Users table for SSO authentication
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            provider_id TEXT NOT NULL,
+            email TEXT NOT NULL,
+            name TEXT,
+            picture TEXT,
+            created_at TEXT NOT NULL,
+            last_login TEXT NOT NULL,
+            UNIQUE(provider, provider_id)
+        )
+    ''')
+    
     # Create indexes
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_documents_project_id ON documents(project_id)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(type)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_videos_document_id ON videos(document_id)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_provider ON users(provider, provider_id)')
     
     conn.commit()
     conn.close()
@@ -459,3 +476,73 @@ def update_video_status(video_id: str, status: VideoStatus, error_message: Optio
     
     conn.commit()
     conn.close()
+
+# ============================================================================
+# USER OPERATIONS (for SSO)
+# ============================================================================
+
+def create_or_update_user(provider_id: str, provider: str, email: str, name: str = None, picture: str = None) -> Dict[str, Any]:
+    """Create or update a user from SSO login"""
+    import uuid
+    from datetime import datetime
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Check if user exists
+    cursor.execute('SELECT * FROM users WHERE provider = ? AND provider_id = ?', (provider, provider_id))
+    existing = cursor.fetchone()
+    
+    now = datetime.now().isoformat()
+    
+    if existing:
+        # Update last login and info
+        cursor.execute('''
+            UPDATE users 
+            SET email = ?, name = ?, picture = ?, last_login = ?
+            WHERE provider = ? AND provider_id = ?
+        ''', (email, name, picture, now, provider, provider_id))
+        user_id = existing['id']
+    else:
+        # Create new user
+        user_id = str(uuid.uuid4())
+        cursor.execute('''
+            INSERT INTO users (id, provider, provider_id, email, name, picture, created_at, last_login)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (user_id, provider, provider_id, email, name, picture, now, now))
+    
+    conn.commit()
+    
+    # Get the user record
+    cursor.execute('SELECT * FROM users WHERE id = ?', (user_id,))
+    user = dict(cursor.fetchone())
+    conn.close()
+    
+    log.info(f'User {email} logged in via {provider}')
+    return user
+
+def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
+    """Get a user by their ID"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT * FROM users WHERE id = ?', (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if row:
+        return dict(row)
+    return None
+
+def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
+    """Get a user by their email"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT * FROM users WHERE email = ?', (email,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if row:
+        return dict(row)
+    return None

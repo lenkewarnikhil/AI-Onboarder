@@ -15,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lib.database import init_db
 from pages import home
 from lib.ui.styles import get_custom_css
+from lib.auth.sso import get_auth_manager
+from components.auth_ui import render_login_page, render_user_menu
 
 # Page configuration
 st.set_page_config(
@@ -30,6 +32,9 @@ st.markdown(get_custom_css(), unsafe_allow_html=True)
 # Initialize database
 init_db()
 
+# Initialize auth manager
+auth = get_auth_manager()
+
 # Session state initialization
 if 'current_page' not in st.session_state:
     st.session_state.current_page = 'home'
@@ -42,8 +47,16 @@ def navigate_to(page: str, project_id: str = None):
     st.session_state.current_project_id = project_id
     st.rerun()
 
-# Router
-if st.session_state.current_page == 'home':
-    home.render(navigate_to)
-elif st.session_state.current_page == 'project':
-    project_view.render(navigate_to, st.session_state.current_project_id)
+# Check authentication if SSO is enabled
+if auth.is_enabled() and not auth.is_authenticated():
+    render_login_page()
+else:
+    # Show user menu if authenticated
+    if auth.is_authenticated():
+        render_user_menu()
+    
+    # Router
+    if st.session_state.current_page == 'home':
+        home.render(navigate_to)
+    elif st.session_state.current_page == 'project':
+        project_view.render(navigate_to, st.session_state.current_project_id)
