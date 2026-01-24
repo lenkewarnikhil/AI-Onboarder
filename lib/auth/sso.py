@@ -114,12 +114,6 @@ class AuthManager:
         
         # Log for debugging (sensitive data not included)
         log.info(f'=== OAuth Login URL Generation ===')
-        log.info(f'Provider: {provider.value}')
-        log.info(f'Authorize URL: {config.authorize_url}')
-        log.info(f'Redirect URI: {redirect_uri}')
-        log.info(f'Client ID: {credentials["client_id"][:20]}...')
-        log.info(f'Scopes: {config.scopes}')
-        log.info(f'Full URL length: {len(login_url)} chars')
         log.info(f'Generated login URL successfully')
         
         return login_url
