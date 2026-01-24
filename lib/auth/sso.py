@@ -22,8 +22,27 @@ class AuthManager:
     
     def __init__(self):
         self.enabled_providers = self._load_enabled_providers()
-        self.callback_url = os.getenv('SSO_CALLBACK_URL', 'http://localhost:8501')
+        self.callback_url = self._get_callback_url()
         self.session_timeout = int(os.getenv('SESSION_TIMEOUT', '3600'))  # 1 hour default
+    
+    def _get_callback_url(self) -> str:
+        """Get the OAuth callback URL, with support for Streamlit Cloud"""
+        # First, check if explicitly set in environment
+        if os.getenv('SSO_CALLBACK_URL'):
+            return os.getenv('SSO_CALLBACK_URL')
+        
+        # Try to detect if running on Streamlit Cloud
+        # Streamlit Cloud sets specific environment variables
+        if os.getenv('STREAMLIT_SERVER_HEADLESS') == 'true':
+            # Running on Streamlit Cloud
+            # Construct URL from app URL if available
+            app_url = os.getenv('STREAMLIT_RUNTIME_APP_URL')
+            if app_url:
+                log.info(f'Detected Streamlit Cloud deployment: {app_url}')
+                return app_url
+        
+        # Default to localhost for local development
+        return 'http://localhost:8501'
         
     def _load_enabled_providers(self) -> Dict[OAuthProvider, Dict[str, str]]:
         """Load enabled OAuth providers from environment variables"""
@@ -82,15 +101,22 @@ class AuthManager:
         st.session_state.oauth_provider = provider.value
         
         # Build authorization URL
+        redirect_uri = f"{self.callback_url}/" if not self.callback_url.endswith('/') else self.callback_url
         params = {
             'client_id': credentials['client_id'],
-            'redirect_uri': f"{self.callback_url}/",
+            'redirect_uri': redirect_uri,
             'response_type': 'code',
             'scope': ' '.join(config.scopes),
             'state': state
         }
         
-        return f"{config.authorize_url}?{urlencode(params)}"
+        login_url = f"{config.authorize_url}?{urlencode(params)}"
+        
+        # Log for debugging (sensitive data not included)
+        log.info(f'OAuth login URL generated for {provider.value}')
+        log.debug(f'Redirect URI: {redirect_uri}')
+        
+        return login_url
     
     def handle_callback(self, code: str, state: str) -> Optional[Dict[str, Any]]:
         """Handle OAuth callback and exchange code for token"""
@@ -122,25 +148,42 @@ class AuthManager:
         )
         credentials = self.enabled_providers[provider]
         
+        # Prepare callback URL (ensure trailing slash)
+        redirect_uri = f"{self.callback_url}/" if not self.callback_url.endswith('/') else self.callback_url
+        
         # Exchange code for access token
         token_data = {
             'client_id': credentials['client_id'],
             'client_secret': credentials['client_secret'],
             'code': code,
             'grant_type': 'authorization_code',
-            'redirect_uri': f"{self.callback_url}/"
+            'redirect_uri': redirect_uri
         }
         
         try:
+            log.info(f'Exchanging OAuth code for {provider.value} token')
+            log.debug(f'Token endpoint: {config.token_url}')
+            log.debug(f'Redirect URI: {redirect_uri}')
+            
             headers = {'Accept': 'application/json'} if provider == OAuthProvider.GITHUB else {}
-            response = requests.post(config.token_url, data=token_data, headers=headers)
+            response = requests.post(config.token_url, data=token_data, headers=headers, timeout=10)
+            
+            if not response.ok:
+                error_msg = response.text
+                log.error(f'OAuth token exchange failed: HTTP {response.status_code}')
+                log.error(f'Response: {error_msg}')
+                return None
+            
             response.raise_for_status()
             token_response = response.json()
             
             access_token = token_response.get('access_token')
             if not access_token:
                 log.error('No access token in response')
+                log.debug(f'Response: {token_response}')
                 return None
+            
+            log.info(f'Successfully obtained access token for {provider.value}')
             
             # Get user info
             user_info = self._get_user_info(provider, access_token, config)
@@ -148,9 +191,18 @@ class AuthManager:
                 # Store in session
                 self._create_session(user_info, provider)
                 return user_info
-                
+            
+        except requests.exceptions.Timeout:
+            log.error(f'OAuth token exchange timeout. Check your internet connection.')
+            return None
+        except requests.exceptions.ConnectionError as e:
+            log.error(f'Connection error during OAuth token exchange: {str(e)}')
+            log.error(f'This may indicate a network issue or firewall blocking the connection.')
+            return None
         except Exception as e:
             log.error(f'OAuth callback error: {str(e)}')
+            import traceback
+            log.debug(traceback.format_exc())
             return None
     
     def _get_user_info(self, provider: OAuthProvider, access_token: str, config) -> Optional[Dict[str, Any]]:

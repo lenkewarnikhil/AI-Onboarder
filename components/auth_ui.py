@@ -3,6 +3,7 @@ Authentication UI Components for Streamlit
 """
 
 import streamlit as st
+import os
 from typing import Callable
 from lib.auth.sso import get_auth_manager
 from lib.auth.providers import OAuthProvider, get_provider_config
@@ -26,17 +27,46 @@ def render_login_page():
                 st.rerun()
             else:
                 st.error('❌ Login failed')
-                st.warning("""
-                **Common causes:**
-                - Session expired during login
-                - Multiple browser tabs open
-                - Browser cookies blocked
                 
-                **Solutions:**
-                - Close other tabs and try again
-                - Clear browser cache/cookies
-                - Try in an incognito window
-                """)
+                # Check if running on Streamlit Cloud
+                is_cloud = os.getenv('STREAMLIT_SERVER_HEADLESS') == 'true'
+                
+                if is_cloud:
+                    st.warning("""
+                    **On Streamlit Cloud? Check these:**
+                    
+                    1. **Callback URL in GitHub OAuth App**:
+                       - Must be exactly: `https://yourusername-appname.streamlit.app/`
+                       - ⚠️ Include trailing slash
+                       - ⚠️ Use HTTPS (not HTTP)
+                    
+                    2. **Secrets configured**:
+                       - Go to share.streamlit.io → Your App → Settings → Secrets
+                       - Add: `SSO_CALLBACK_URL=https://yourusername-appname.streamlit.app`
+                       - Add: `GITHUB_CLIENT_ID=your_id`
+                       - Add: `GITHUB_CLIENT_SECRET=your_secret`
+                    
+                    3. **Check logs**:
+                       - Go to share.streamlit.io → Your App → Manage app → View logs
+                       - Look for error messages
+                    
+                    See STREAMLIT_CLOUD_SSO_FIX.md for detailed instructions.
+                    """)
+                else:
+                    st.warning("""
+                    **Common causes:**
+                    - Session expired during login
+                    - Multiple browser tabs open
+                    - Browser cookies blocked
+                    - Callback URL doesn't match OAuth app settings
+                    
+                    **Solutions:**
+                    - Close other tabs and try again
+                    - Clear browser cache/cookies
+                    - Try in an incognito window
+                    - Verify OAuth app settings match your URL
+                    """)
+                
                 if st.button("Try Again"):
                     st.query_params.clear()
                     st.rerun()
@@ -51,6 +81,22 @@ def render_login_page():
         if not auth.enabled_providers:
             st.warning("⚠️ SSO is not configured. Please contact your administrator.")
             st.info("To enable SSO, configure OAuth providers in your environment variables.")
+            
+            # Show configuration info
+            is_cloud = os.getenv('STREAMLIT_SERVER_HEADLESS') == 'true'
+            if is_cloud:
+                with st.expander("📋 Setup Guide for Streamlit Cloud"):
+                    st.markdown("""
+                    1. Create OAuth app at https://github.com/settings/developers
+                    2. Go to share.streamlit.io → Your App → Settings → Secrets
+                    3. Add these secrets:
+                       ```
+                       GITHUB_CLIENT_ID=your_id
+                       GITHUB_CLIENT_SECRET=your_secret
+                       SSO_CALLBACK_URL=https://yourusername-appname.streamlit.app
+                       ```
+                    4. Rerun the app
+                    """)
             return
         
         st.markdown("### Sign in with:")
