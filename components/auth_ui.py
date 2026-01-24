@@ -110,10 +110,10 @@ def render_login_page():
             
             login_url = auth.get_login_url(provider)
             
-            # Debug: Show the OAuth URL in expandable section
-            with st.expander(f"🔍 Debug: {config.name} OAuth URL", expanded=False):
-                st.code(login_url, language="text")
-                st.caption("Copy this URL and test it in a new tab if the button doesn't work")
+            # # Debug: Show the OAuth URL in expandable section
+            # with st.expander(f"🔍 Debug: {config.name} OAuth URL", expanded=False):
+            #     st.code(login_url, language="text")
+            #     st.caption("Copy this URL and test it in a new tab if the button doesn't work")
             
             # Create a button that uses HTML link for better compatibility
             st.markdown(
