@@ -108,13 +108,34 @@ def render_login_page():
                 auth.enabled_providers.get(provider, {}).get('domain')
             )
             
-            if st.button(
-                f"{config.icon} Sign in with {config.name}",
-                key=f"login_{provider.value}",
-                use_container_width=True
-            ):
-                login_url = auth.get_login_url(provider)
-                st.markdown(f'<meta http-equiv="refresh" content="0;url={login_url}">', unsafe_allow_html=True)
+            login_url = auth.get_login_url(provider)
+            
+            # Debug: Show the OAuth URL in expandable section
+            with st.expander(f"🔍 Debug: {config.name} OAuth URL", expanded=False):
+                st.code(login_url, language="text")
+                st.caption("Copy this URL and test it in a new tab if the button doesn't work")
+            
+            # Create a button that uses HTML link for better compatibility
+            st.markdown(
+                f"""
+                <a href="{login_url}" style="text-decoration: none;">
+                    <button style="
+                        width: 100%;
+                        padding: 10px;
+                        background-color: #1f1f1f;
+                        color: white;
+                        border: 1px solid #555;
+                        border-radius: 4px;
+                        cursor: pointer;
+                        font-size: 16px;
+                        font-weight: 500;
+                    ">
+                        {config.icon} Sign in with {config.name}
+                    </button>
+                </a>
+                """,
+                unsafe_allow_html=True
+            )
         
         st.markdown("---")
         st.caption("🔒 Your data is secure. We only access your basic profile information.")
